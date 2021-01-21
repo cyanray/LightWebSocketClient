@@ -374,7 +374,7 @@ namespace cyanray
 				}
 			}
 
-			// if new data is appended in buffer
+			// if new data is appended to the buffer
 			if (tsize != buffer.size())
 			{
 				FrameInfo info;
@@ -415,6 +415,20 @@ namespace cyanray
 								BinaryReceivedCallback(*this, vector<uint8_t>(payload_start, payload_end));
 							}
 						}
+						else if (info.Opcode == WebSocketOpcode::Ping)
+						{
+							try
+							{
+								Pong();
+							}
+							catch (const std::exception& ex)
+							{
+								if (ErrorCallback != nullptr)
+								{
+									ErrorCallback(*this, string("An error occurs on sending pong frame. error: ")+ ex.what());
+								}
+							}
+						}
 						else if (info.Opcode == WebSocketOpcode::Close)
 						{
 							if (status == Status::Closed)
@@ -431,6 +445,17 @@ namespace cyanray
 								}
 							}
 							break;
+						}
+						else
+						{
+							if (ErrorCallback != nullptr)
+							{
+								ErrorCallback(*this, 
+									string("The opcode #")
+										.append(to_string((int)info.Opcode)
+										.append(" is not supported.") ));
+
+							}
 						}
 						buffer.erase(buffer.begin(), buffer.begin() + (offset + info.PayloadLength));
 					}
