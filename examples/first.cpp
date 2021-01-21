@@ -36,9 +36,8 @@ int main()
 		});
 
 	string c;
-	while (true)
+	while (getline(std::cin, c);)
 	{
-		getline(std::cin, c);
 		if (c == "quit")
 		{
 			client.Close();
