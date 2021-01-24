@@ -328,7 +328,7 @@ namespace cyanray
 	void WebSocketClient::Close()
 	{
 		if (status == Status::Closed) return;
-		status = Status::Closed;
+		status = Status::Closing;
 		PrivateMembers->Send(WebSocketOpcode::Close);
 	}
 
@@ -366,7 +366,7 @@ namespace cyanray
 				{
 					buffer.insert(buffer.end(), buf.begin(), buf.begin() + bytesReceived);
 				}
-				else
+				else if(bytesReceived == 0)
 				{
 					this->Shutdown();
 					if (LostConnectionCallback != nullptr)
@@ -434,14 +434,15 @@ namespace cyanray
 						}
 						else if (info.Opcode == WebSocketOpcode::Close)
 						{
-							if (status == Status::Closed)
+							if (status == Status::Closing)
 							{
-								closesocket(PrivateMembers->wsSocket);
+								Shutdown();
 							}
 							else if (status == Status::Open)
 							{
 								// close frame from server, response a close frame and close socket.
 								Close();
+								Shutdown();
 								if (LostConnectionCallback != nullptr)
 								{
 									LostConnectionCallback(*this, 1000);
