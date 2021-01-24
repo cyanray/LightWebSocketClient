@@ -1,11 +1,12 @@
 #include <iostream>
+#include <future>
 #include <WebSocketClient.h>
 using namespace std;
 using namespace cyanray;
 
 int main()
 {
-	const string ws_uri = "ws://localhost:5539/chat?sessionkey=123";
+	const string ws_uri = "ws://localhost:5539/command?authkey=RF4r8uEN";
 
 	WebSocketClient client;
 	client.Connect(ws_uri);
@@ -36,15 +37,21 @@ int main()
 		});
 
 	string c;
-	while (getline(std::cin, c);)
+	while (getline(std::cin, c))
 	{
-		if (c == "quit")
+		if (c == "ping")
+		{
+			client.Ping();
+		}
+		else if (c == "quit")
 		{
 			client.Close();
 			break;
 		}
-		client.SendText(c);
+		else
+		{
+			client.SendText(c);
+		}
 	}
-
 	return 0;
 }
