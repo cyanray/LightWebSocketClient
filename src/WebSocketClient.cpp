@@ -322,6 +322,12 @@ namespace cyanray
 		PrivateMembers->Send(WebSocketOpcode::Pong);
 	}
 
+	void WebSocketClient::Pong(const vector<uint8_t>& data)
+	{
+		if (status == Status::Closed) return;
+		PrivateMembers->Send(WebSocketOpcode::Pong, data.begin(), data.end());
+	}
+
 	void WebSocketClient::Close()
 	{
 		if (status == Status::Closed) return;
@@ -420,7 +426,7 @@ namespace cyanray
 						{
 							try
 							{
-								Pong();
+								Pong(vector<uint8_t>(payload_start, payload_end));
 							}
 							catch (const std::exception& ex)
 							{
