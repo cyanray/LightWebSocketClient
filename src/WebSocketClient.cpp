@@ -346,7 +346,7 @@ namespace cyanray
 
 		struct timeval tv;
 		tv.tv_sec = 0;
-		tv.tv_usec = 20 * 1000;
+		tv.tv_usec = 200 * 1000;
 
 		while (status == Status::Open)
 		{
@@ -382,7 +382,7 @@ namespace cyanray
 				}
 			}
 
-			if (buffer.size())
+			while (buffer.size())
 			{
 				FrameInfo info;
 				int offset = TryParseFrame(&info, buffer.data(), buffer.size());
@@ -392,6 +392,7 @@ namespace cyanray
 					{
 						ErrorCallback(*this, "Failed to parse frame.");
 					}
+					break;
 				}
 				else
 				{
@@ -452,7 +453,7 @@ namespace cyanray
 									LostConnectionCallback(*this, 1000);
 								}
 							}
-							break;
+							return;
 						}
 						else
 						{
@@ -466,6 +467,10 @@ namespace cyanray
 							}
 						}
 						buffer.erase(buffer.begin(), buffer.begin() + (offset + info.PayloadLength));
+					}
+					else
+					{
+						break;
 					}
 				}
 			}
