@@ -341,14 +341,14 @@ namespace cyanray
 		vector<byte_t> buffer;
 		buffer.reserve(8192);
 
-		fd_set fds_read;
-		FD_ZERO(&fds_read);
-
-		struct timeval tv;
 		while (status == Status::Open)
 		{
+			struct timeval tv;
 			tv.tv_sec = 0;
 			tv.tv_usec = 200 * 1000;
+
+			fd_set fds_read;
+			FD_ZERO(&fds_read);
 			FD_SET(sock, &fds_read);
 			int ret = select((int)(sock + 1), &fds_read, NULL, NULL, &tv);
 			if (ret < 0)
@@ -368,7 +368,7 @@ namespace cyanray
 				}
 				else
 				{
-					// If close socket actively(shutdown), should not call the callback function.
+					// If close socket manually(shutdown), should not call the callback function.
 					if (status == Status::Open)
 					{
 						this->Shutdown();
@@ -402,7 +402,7 @@ namespace cyanray
 						if (info.Mask)
 						{
 							int i = 0;
-							for (auto it = payload_start; it != payload_end; ++it)
+							for (auto& it = payload_start; it != payload_end; ++it)
 							{
 								*it = *it ^ info.MaskKey[i++ % 4];
 							}
