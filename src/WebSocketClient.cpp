@@ -175,7 +175,7 @@ namespace cyanray
 		if (info.PayloadLength == 126)
 		{
 			if (len < 4) return -1;
-			info.PayloadLength = (frame_data[2] << 8) | frame_data[3];
+			info.PayloadLength = ((int64_t)frame_data[2] << 8) | frame_data[3];
 			offset = 4;
 		}
 		else if (info.PayloadLength == 127)
