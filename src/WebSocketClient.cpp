@@ -242,7 +242,7 @@ namespace cyanray
 		handshakingWords.append("Host: ").append(hostname).append(":").append(to_string(port)).append("\r\n");
 		handshakingWords.append("Connection: Upgrade").append("\r\n");
 		handshakingWords.append("Upgrade: websocket").append("\r\n");
-		handshakingWords.append("Origin: http://example.com").append("\r\n");
+		//handshakingWords.append("Origin: http://example.com").append("\r\n");
 		handshakingWords.append("Sec-WebSocket-Version: 13").append("\r\n");
 		handshakingWords.append("Sec-WebSocket-Key: O7Tk4xI04v+X91cuvefLSQ==").append("\r\n");
 		handshakingWords.append("\r\n");
