@@ -6,9 +6,8 @@
 #include <limits>
 #include <thread>
 #include <regex>
+#include <random>
 #include "WebSocketClient.h"
-using namespace std;
-
 
 #if defined(_WIN32)
 
@@ -51,7 +50,7 @@ namespace cyanray
 		hints.ai_family = AF_UNSPEC;
 		hints.ai_socktype = SOCK_STREAM;
 
-		int ret = getaddrinfo(hostname.c_str(), to_string(port).c_str(), &hints, &result);
+		int ret = getaddrinfo(hostname.c_str(), std::to_string(port).c_str(), &hints, &result);
 		if (ret != 0)
 		{
 			throw std::runtime_error("getaddrinfo failed.");
@@ -73,6 +72,12 @@ namespace cyanray
 		return sockfd;
 	}
 
+	static std::array<byte_t, 4> generate_mask_key() {
+		static thread_local std::mt19937 rng(std::random_device{}());
+		std::uniform_int_distribution<int> dist(0, 255);
+		return { (byte_t)dist(rng), (byte_t)dist(rng), (byte_t)dist(rng), (byte_t)dist(rng) };
+	}
+
 	enum class WebSocketOpcode
 	{
 		Continuation = 0x00,
@@ -88,10 +93,11 @@ namespace cyanray
 		socket_t wsSocket = INVALID_SOCKET;
 		std::thread recvLoop;
 
-		void Send(WebSocketOpcode opcode)
+		void Send(WebSocketOpcode opcode, std::mutex& mtx)
 		{
-			array<byte_t, 6> frame_data = { 0x00, 0x80, 0x00, 0x00, 0x00, 0x00 };
+			std::array<byte_t, 6> frame_data = { 0x00, 0x80, 0x00, 0x00, 0x00, 0x00 };
 			frame_data[0] = 0x80 | (byte_t)opcode;
+			std::lock_guard<std::mutex> lock(mtx);
 			int sendResult = send(wsSocket, (char*)frame_data.data(), (int)frame_data.size(), 0);
 			if (sendResult == SOCKET_ERROR)
 			{
@@ -100,12 +106,12 @@ namespace cyanray
 		}
 
 		template<class Iterator>
-		void Send(WebSocketOpcode opcode, Iterator begin, Iterator end)
+		void Send(WebSocketOpcode opcode, Iterator begin, Iterator end, std::mutex& mtx)
 		{
 			size_t length = end - begin;
 			vector<byte_t> frame_data;
-			frame_data.reserve(2048);	// TODO: replace with a const variable
-			frame_data.push_back(0x80 | (byte_t)opcode);	// Text Frame
+			frame_data.reserve(length + 14);
+			frame_data.push_back(0x80 | (byte_t)opcode);
 			// MASK must be 1
 			if (length <= 125)
 			{
@@ -136,7 +142,7 @@ namespace cyanray
 				throw std::runtime_error("Data is too large. Does not support fragmentation.");
 			}
 
-			std::array<byte_t, 4> mask_key{ 0xd2, 0x28, 0xb6, 0xde };
+			auto mask_key = generate_mask_key();
 			frame_data.insert(frame_data.end(), mask_key.begin(), mask_key.end());
 
 			int i = 0;
@@ -145,6 +151,7 @@ namespace cyanray
 				frame_data.push_back(*it ^ mask_key[i++ % 4]);
 			}
 
+			std::lock_guard<std::mutex> lock(mtx);
 			int sendResult = send(wsSocket, (char*)frame_data.data(), (int)frame_data.size(), 0);
 			if (sendResult == SOCKET_ERROR)
 			{
@@ -175,17 +182,23 @@ namespace cyanray
 		if (info.PayloadLength == 126)
 		{
 			if (len < 4) return -1;
-			info.PayloadLength = ((int64_t)frame_data[2] << 8) | frame_data[3];
+			info.PayloadLength = ((uint64_t)frame_data[2] << 8) | frame_data[3];
 			offset = 4;
 		}
 		else if (info.PayloadLength == 127)
 		{
 			if (len < 10) return -1;
-			memcpy(&info.PayloadLength, &frame_data[2], sizeof(uint64_t));
+			uint64_t payload = 0;
+			for (int i = 0; i < 8; ++i)
+			{
+				payload = (payload << 8) | frame_data[2 + i];
+			}
+			info.PayloadLength = payload;
 			offset = 10;
 		}
 		if (info.Mask)
 		{
+			if (len < (size_t)(offset + 4)) return -1;
 			memcpy(&info.MaskKey, &frame_data[offset], sizeof(info.MaskKey));
 			offset += 4;
 		}
@@ -203,9 +216,10 @@ namespace cyanray
 		}
 #endif
 	}
-	
+
 	WebSocketClient::~WebSocketClient()
 	{
+		Shutdown();
 		delete PrivateMembers;
 #if defined(_WIN32)
 		WSACleanup();
@@ -214,7 +228,7 @@ namespace cyanray
 
 	void WebSocketClient::Connect(const string& ws_uri)
 	{
-		regex pattern(R"(ws:\/\/([^:\/]+):?(\d+)?(\/[\S]*)?)");
+		std::regex pattern(R"(ws:\/\/([^:\/]+):?(\d+)?(\/[\S]*)?)");
 		std::smatch matches;
 		std::regex_search(ws_uri, matches, pattern);
 		if (matches.size() == 0)
@@ -239,10 +253,9 @@ namespace cyanray
 
 		string handshakingWords;
 		handshakingWords.append("GET ").append(path).append(" HTTP/1.1").append("\r\n");
-		handshakingWords.append("Host: ").append(hostname).append(":").append(to_string(port)).append("\r\n");
+		handshakingWords.append("Host: ").append(hostname).append(":").append(std::to_string(port)).append("\r\n");
 		handshakingWords.append("Connection: Upgrade").append("\r\n");
 		handshakingWords.append("Upgrade: websocket").append("\r\n");
-		//handshakingWords.append("Origin: http://example.com").append("\r\n");
 		handshakingWords.append("Sec-WebSocket-Version: 13").append("\r\n");
 		handshakingWords.append("Sec-WebSocket-Key: O7Tk4xI04v+X91cuvefLSQ==").append("\r\n");
 		handshakingWords.append("\r\n");
@@ -250,23 +263,50 @@ namespace cyanray
 		int sendResult = send(PrivateMembers->wsSocket, handshakingWords.c_str(), (int)handshakingWords.size(), 0);
 		if (sendResult == SOCKET_ERROR)
 		{
+			closesocket(PrivateMembers->wsSocket);
+			PrivateMembers->wsSocket = INVALID_SOCKET;
 			throw std::runtime_error("An error occurred during the handshake.");
 		}
 
 		char response_buffer[4096] = { 0 };
 		int bytesReceived = recv(PrivateMembers->wsSocket, response_buffer, 4096, 0);
-		// TODO: parse Response
+		if (bytesReceived <= 0)
+		{
+			closesocket(PrivateMembers->wsSocket);
+			PrivateMembers->wsSocket = INVALID_SOCKET;
+			throw std::runtime_error("No handshake response from server.");
+		}
 
-		status = Status::Open;
-		PrivateMembers->recvLoop = std::thread([this]() {RecvLoop(); });
-		PrivateMembers->recvLoop.detach();
+		status.store(Status::Open);
+		PrivateMembers->recvLoop = std::thread([this]() { RecvLoop(); });
 	}
 
 	void WebSocketClient::Shutdown()
 	{
-		if (status == Status::Closed) return;
-		status = Status::Closed;
-		closesocket(PrivateMembers->wsSocket);
+		// 原子地将 status 设为 Closed，只有成功从 非Closed 转换的一方负责关闭 socket
+		Status prev = status.exchange(Status::Closed);
+		if (prev != Status::Closed)
+		{
+			if (PrivateMembers->wsSocket != INVALID_SOCKET)
+			{
+				closesocket(PrivateMembers->wsSocket);
+				PrivateMembers->wsSocket = INVALID_SOCKET;
+			}
+		}
+
+		if (PrivateMembers->recvLoop.joinable())
+		{
+			// 如果是从 RecvLoop 线程内部调用 Shutdown（比如回调中触发 reconnect），
+			// 不能 join 自己，改为 detach，线程回调返回后会自然退出
+			if (PrivateMembers->recvLoop.get_id() == std::this_thread::get_id())
+			{
+				PrivateMembers->recvLoop.detach();
+			}
+			else
+			{
+				PrivateMembers->recvLoop.join();
+			}
+		}
 	}
 
 	void WebSocketClient::OnTextReceived(Callback<string> callback)
@@ -291,48 +331,56 @@ namespace cyanray
 
 	void WebSocketClient::SendText(const string& text)
 	{
-		if (status == Status::Closed)
-			throw std::runtime_error("WebSocket is closed.");
-		PrivateMembers->Send(WebSocketOpcode::Text, text.begin(), text.end());
+		if (status.load() != Status::Open)
+			throw std::runtime_error("WebSocket is not open.");
+		PrivateMembers->Send(WebSocketOpcode::Text, text.begin(), text.end(), sendMutex);
 	}
 
 	void WebSocketClient::SendBinary(const char* data, size_t length)
 	{
-		if (status == Status::Closed)
-			throw std::runtime_error("WebSocket is closed.");
-		PrivateMembers->Send(WebSocketOpcode::Binary, data, data + length);
+		if (status.load() != Status::Open)
+			throw std::runtime_error("WebSocket is not open.");
+		PrivateMembers->Send(WebSocketOpcode::Binary, data, data + length, sendMutex);
 	}
 
 	void WebSocketClient::SendBinary(const uint8_t* data, size_t length)
 	{
-		if (status == Status::Closed)
-			throw std::runtime_error("WebSocket is closed.");
-		PrivateMembers->Send(WebSocketOpcode::Binary, data, data + length);
+		if (status.load() != Status::Open)
+			throw std::runtime_error("WebSocket is not open.");
+		PrivateMembers->Send(WebSocketOpcode::Binary, data, data + length, sendMutex);
 	}
 
 	void WebSocketClient::Ping()
 	{
-		if (status == Status::Closed) return;
-		PrivateMembers->Send(WebSocketOpcode::Ping);
+		if (status.load() != Status::Open) return;
+		PrivateMembers->Send(WebSocketOpcode::Ping, sendMutex);
 	}
 
 	void WebSocketClient::Pong()
 	{
-		if (status == Status::Closed) return;
-		PrivateMembers->Send(WebSocketOpcode::Pong);
+		if (status.load() != Status::Open) return;
+		PrivateMembers->Send(WebSocketOpcode::Pong, sendMutex);
 	}
 
 	void WebSocketClient::Pong(const vector<uint8_t>& data)
 	{
-		if (status == Status::Closed) return;
-		PrivateMembers->Send(WebSocketOpcode::Pong, data.begin(), data.end());
+		if (status.load() != Status::Open) return;
+		PrivateMembers->Send(WebSocketOpcode::Pong, data.begin(), data.end(), sendMutex);
 	}
 
 	void WebSocketClient::Close()
 	{
-		if (status == Status::Closed) return;
-		status = Status::Closing;
-		PrivateMembers->Send(WebSocketOpcode::Close);
+		Status expected = Status::Open;
+		if (!status.compare_exchange_strong(expected, Status::Closing))
+			return;
+		try
+		{
+			PrivateMembers->Send(WebSocketOpcode::Close, sendMutex);
+		}
+		catch (...)
+		{
+			// 发送 close 帧失败不是严重错误，忽略
+		}
 	}
 
 	void WebSocketClient::RecvLoop()
@@ -341,7 +389,7 @@ namespace cyanray
 		vector<byte_t> buffer;
 		buffer.reserve(8192);
 
-		while (status == Status::Open)
+		while (status.load() == Status::Open || status.load() == Status::Closing)
 		{
 			struct timeval tv;
 			tv.tv_sec = 0;
@@ -351,16 +399,22 @@ namespace cyanray
 			FD_ZERO(&fds_read);
 			FD_SET(sock, &fds_read);
 			int ret = select((int)(sock + 1), &fds_read, NULL, NULL, &tv);
+
+			// select 出错：socket 可能已被关闭，直接退出循环
 			if (ret < 0)
 			{
-				if (ErrorCallback != nullptr)
-				{
-					ErrorCallback(*this, "select error.");
-				}
+				break;
 			}
-			if (ret != 0 && FD_ISSET(sock, &fds_read))
+
+			// select 超时，继续下一轮
+			if (ret == 0)
 			{
-				array<char, 2048>  buf = {};
+				continue;
+			}
+
+			if (FD_ISSET(sock, &fds_read))
+			{
+				std::array<char, 4096> buf = {};
 				int bytesReceived = recv(sock, buf.data(), (int)buf.size(), 0);
 				if (bytesReceived > 0)
 				{
@@ -368,16 +422,18 @@ namespace cyanray
 				}
 				else
 				{
-					// If close socket manually(shutdown), should not call the callback function.
-					if (status == Status::Open)
+					// 连接断开，原子设置状态防止和 Shutdown 竞争
+					Status prev = status.exchange(Status::Closed);
+					if (prev == Status::Open)
 					{
-						this->Shutdown();
+						closesocket(PrivateMembers->wsSocket);
+						PrivateMembers->wsSocket = INVALID_SOCKET;
 						if (LostConnectionCallback != nullptr)
 						{
 							LostConnectionCallback(*this, 1006);
 						}
 					}
-					break;
+					return;
 				}
 			}
 
@@ -387,22 +443,18 @@ namespace cyanray
 				int offset = TryParseFrame(&info, buffer.data(), buffer.size());
 				if (offset < 0)
 				{
-					if (ErrorCallback != nullptr)
-					{
-						ErrorCallback(*this, "Failed to parse frame.");
-					}
 					break;
 				}
 				else
 				{
-					if (buffer.size() >= offset + info.PayloadLength)
+					if (buffer.size() >= (size_t)(offset + info.PayloadLength))
 					{
 						auto payload_start = buffer.begin() + offset;
 						auto payload_end = buffer.begin() + (offset + info.PayloadLength);
 						if (info.Mask)
 						{
 							int i = 0;
-							for (auto& it = payload_start; it != payload_end; ++it)
+							for (auto it = payload_start; it != payload_end; ++it)
 							{
 								*it = *it ^ info.MaskKey[i++ % 4];
 							}
@@ -432,22 +484,23 @@ namespace cyanray
 							{
 								if (ErrorCallback != nullptr)
 								{
-									ErrorCallback(*this, string("An error occurs on sending pong frame. error: ")+ ex.what());
+									ErrorCallback(*this, string("An error occurs on sending pong frame. error: ") + ex.what());
 								}
 							}
 						}
 						else if (info.Opcode == WebSocketOpcode::Close)
 						{
-							if (status == Status::Closing)
+							Status prev = status.exchange(Status::Closed);
+							if (prev != Status::Closed)
 							{
-								Shutdown();
-							}
-							else if (status == Status::Open)
-							{
-								// close frame from server, response a close frame and close socket.
-								Close();
-								Shutdown();
-								if (LostConnectionCallback != nullptr)
+								if (prev == Status::Open)
+								{
+									// 服务器主动发 close，回复一个 close 帧
+									try { PrivateMembers->Send(WebSocketOpcode::Close, sendMutex); } catch (...) {}
+								}
+								closesocket(PrivateMembers->wsSocket);
+								PrivateMembers->wsSocket = INVALID_SOCKET;
+								if (prev == Status::Open && LostConnectionCallback != nullptr)
 								{
 									LostConnectionCallback(*this, 1000);
 								}
@@ -458,11 +511,10 @@ namespace cyanray
 						{
 							if (ErrorCallback != nullptr)
 							{
-								ErrorCallback(*this, 
+								ErrorCallback(*this,
 									string("The opcode #")
-										.append(to_string((int)info.Opcode)
-										.append(" is not supported.") ));
-
+										.append(std::to_string((int)info.Opcode)
+										.append(" is not supported.")));
 							}
 						}
 						buffer.erase(buffer.begin(), buffer.begin() + (offset + info.PayloadLength));
@@ -474,10 +526,7 @@ namespace cyanray
 				}
 			}
 		}
-
 	}
 
 
 }
-
-
