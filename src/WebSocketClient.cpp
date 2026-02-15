@@ -294,10 +294,18 @@ namespace cyanray
 			}
 		}
 
-		// 无论谁关了 socket，都要确保线程被 join
 		if (PrivateMembers->recvLoop.joinable())
 		{
-			PrivateMembers->recvLoop.join();
+			// 如果是从 RecvLoop 线程内部调用 Shutdown（比如回调中触发 reconnect），
+			// 不能 join 自己，改为 detach，线程回调返回后会自然退出
+			if (PrivateMembers->recvLoop.get_id() == std::this_thread::get_id())
+			{
+				PrivateMembers->recvLoop.detach();
+			}
+			else
+			{
+				PrivateMembers->recvLoop.join();
+			}
 		}
 	}
 
