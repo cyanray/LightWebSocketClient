@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <atomic>
+#include <mutex>
 using std::vector;
 using std::string;
 
@@ -29,7 +31,7 @@ namespace cyanray
 		 * @brief Get status.
 		 * @return WebSocketClient::Status
 		*/
-		Status GetStatus() const { return status; }
+		Status GetStatus() const { return status.load(); }
 
 		/**
 		 * @brief Connect by websocket uri.
@@ -63,14 +65,14 @@ namespace cyanray
 		void OnBinaryReceived(Callback<vector<uint8_t>> callback);
 
 		/**
-		 * @brief If an error occurs during the receiving process (such as a wrong frame), 
+		 * @brief If an error occurs during the receiving process (such as a wrong frame),
 				  this function will be called.
 		 * @param callback Callback funtion.
 		*/
 		void OnError(Callback<string> callback);
 
 		/**
-		 * @brief If tcp connection aborted or received close frame, 
+		 * @brief If tcp connection aborted or received close frame,
 		 *		  the callback function will be called.
 		 * @param callback Callback funtion.
 		*/
@@ -113,8 +115,8 @@ namespace cyanray
 		void Pong(const vector<uint8_t>& data);
 
 		/**
-		 * @brief Send a close frame. 
-				  If websocket server response a close frame, 
+		 * @brief Send a close frame.
+				  If websocket server response a close frame,
 				  will close tcp socket.
 		*/
 		void Close();
@@ -124,7 +126,8 @@ namespace cyanray
 		Callback<vector<uint8_t>> BinaryReceivedCallback;
 		Callback<string> ErrorCallback;
 		Callback<int> LostConnectionCallback;
-		Status status;
+		std::atomic<Status> status;
+		std::mutex sendMutex;
 		// avoid including implementation-related headers.
 		struct pimpl;
 		pimpl* PrivateMembers;
