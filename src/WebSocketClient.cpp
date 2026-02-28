@@ -245,6 +245,7 @@ namespace cyanray
 
 	void WebSocketClient::Connect(const string& hostname, int port, const string& path)
 	{
+        Shutdown();
 		PrivateMembers->wsSocket = hostname_connect(hostname, port);
 		if (PrivateMembers->wsSocket == INVALID_SOCKET)
 		{
